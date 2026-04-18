@@ -8,8 +8,31 @@ services:
     volumes:
       # Optional: mount server-providers.yml for provider config
       # - ./server-providers.yml:/app/server-providers.yml:ro
-      - openmaic-data:/app/data
+      #
+      # Persisted classroom data — served via GET /api/classroom-media/... and read back
+      # on restart. /app/data is the default DATA_DIR (override via DATA_DIR in .env.local
+      # if you change the container mount target).
+      # Host bind mount: the host dir must be chown'd to uid 1001 to match the container's
+      # `nextjs` user (`sudo chown -R 1001:1001 ./data` once). See .env.example "Storage"
+      # section for details.
+      - ./data:/app/data
+    restart: unless-stopped
+
+  # Optional distributed-tracing backend for OpenMAIC's OpenTelemetry spans.
+  # Activate with:   docker compose --profile tempo up -d
+  # Point the app at it by setting OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4318 in .env.local.
+  tempo:
+    image: grafana/tempo:latest
+    profiles: ["tempo"]
+    command: ["-config.file=/etc/tempo.yml"]
+    ports:
+      - "3200:3200"       # Tempo HTTP query API (use as Grafana datasource)
+      - "4317:4317"       # OTLP gRPC
+      - "4318:4318"       # OTLP HTTP (default used by instrumentation.ts)
+    volumes:
+      - ./ops/tempo.yml:/etc/tempo.yml:ro
+      - tempo-data:/var/tempo
     restart: unless-stopped
 
 volumes:
-  openmaic-data:
+  tempo-data:
