@@ -1,0 +1,33 @@
+# Minimal Grafana Tempo config for local development.
+# Receives OTLP over both gRPC (4317) and HTTP (4318); stores traces on local disk under
+# /var/tempo (mounted as a docker volume). No retention tuning — good enough for a dev box.
+#
+# To browse traces: add a Tempo datasource in Grafana pointing at http://tempo:3200
+# (if Grafana runs in the same compose network) or http://localhost:3200 from your host.
+
+server:
+  http_listen_port: 3200
+
+distributor:
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317
+        http:
+          endpoint: 0.0.0.0:4318
+
+ingester:
+  max_block_duration: 5m
+
+compactor:
+  compaction:
+    block_retention: 24h
+
+storage:
+  trace:
+    backend: local
+    local:
+      path: /var/tempo/blocks
+    wal:
+      path: /var/tempo/wal

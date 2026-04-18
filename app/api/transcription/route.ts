@@ -4,12 +4,17 @@ import { resolveASRApiKey, resolveASRBaseUrl } from '@/lib/server/provider-confi
 import type { ASRProviderId } from '@/lib/audio/types';
 import { createLogger } from '@/lib/logger';
 import { apiError, apiSuccess } from '@/lib/server/api-response';
+import { applyRateLimit } from '@/lib/server/rate-limit';
+import { apiErrorFromUpstream } from '@/lib/server/upstream-error';
 import { validateUrlForSSRF } from '@/lib/server/ssrf-guard';
 const log = createLogger('Transcription');
 
 export const maxDuration = 60;
 
 export async function POST(req: NextRequest) {
+  const rateLimited = applyRateLimit('transcription', req);
+  if (rateLimited) return rateLimited;
+
   let resolvedProviderId: string | undefined;
   let resolvedModelId: string | undefined;
   try {
@@ -63,11 +68,6 @@ export async function POST(req: NextRequest) {
       `Transcription failed [provider=${resolvedProviderId ?? 'unknown'}, model=${resolvedModelId ?? 'default'}]:`,
       error,
     );
-    return apiError(
-      'TRANSCRIPTION_FAILED',
-      500,
-      'Transcription failed',
-      error instanceof Error ? error.message : 'Unknown error',
-    );
+    return apiErrorFromUpstream(error, { defaultCode: 'TRANSCRIPTION_FAILED' });
   }
 }

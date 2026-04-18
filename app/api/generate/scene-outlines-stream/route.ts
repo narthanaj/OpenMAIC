@@ -32,6 +32,7 @@ import type {
   ImageMapping,
 } from '@/lib/types/generation';
 import { apiError } from '@/lib/server/api-response';
+import { applyRateLimit } from '@/lib/server/rate-limit';
 import { createLogger } from '@/lib/logger';
 import { resolveModelFromHeaders } from '@/lib/server/resolve-model';
 const log = createLogger('Outlines Stream');
@@ -126,6 +127,9 @@ function extractNewOutlines(buffer: string, alreadyParsed: number): SceneOutline
 }
 
 export async function POST(req: NextRequest) {
+  const rateLimited = applyRateLimit('generate', req);
+  if (rateLimited) return rateLimited;
+
   let requirementSnippet: string | undefined;
   let resolvedModelString: string | undefined;
   try {

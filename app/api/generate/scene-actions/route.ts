@@ -25,6 +25,7 @@ import type {
 import type { SpeechAction } from '@/lib/types/action';
 import { createLogger } from '@/lib/logger';
 import { apiError, apiSuccess } from '@/lib/server/api-response';
+import { applyRateLimit } from '@/lib/server/rate-limit';
 import { resolveModelFromHeaders } from '@/lib/server/resolve-model';
 
 const log = createLogger('Scene Actions API');
@@ -32,6 +33,9 @@ const log = createLogger('Scene Actions API');
 export const maxDuration = 60;
 
 export async function POST(req: NextRequest) {
+  const rateLimited = applyRateLimit('generate', req);
+  if (rateLimited) return rateLimited;
+
   let outlineTitle: string | undefined;
   let resolvedModelString: string | undefined;
   try {

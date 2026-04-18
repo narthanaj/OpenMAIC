@@ -11,6 +11,12 @@ import type { Scene } from '@/lib/types/stage';
 import type { Action, SpeechAction } from '@/lib/types/action';
 import type { TTSProviderId } from '@/lib/audio/types';
 import { splitLongSpeechActions } from '@/lib/audio/tts-utils';
+import {
+  requestTTSAudio,
+  deriveTTSFallbackChain,
+  shouldShowDegradationToast,
+} from '@/lib/audio/tts-client';
+import { toast } from 'sonner';
 import { generateMediaForOutlines } from '@/lib/media/media-orchestrator';
 import { createLogger } from '@/lib/logger';
 
@@ -131,44 +137,53 @@ export async function generateAndStoreTTS(
   if (settings.ttsProviderId === 'browser-native-tts') return;
 
   const ttsProviderConfig = settings.ttsProvidersConfig?.[settings.ttsProviderId];
-  const response = await fetch('/api/generate/tts', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      text,
-      audioId,
-      ttsProviderId: settings.ttsProviderId,
-      ttsModelId: ttsProviderConfig?.modelId,
-      ttsVoice: settings.ttsVoice,
-      ttsSpeed: settings.ttsSpeed,
-      ttsApiKey: ttsProviderConfig?.apiKey || undefined,
-      ttsBaseUrl:
-        ttsProviderConfig?.baseUrl || ttsProviderConfig?.customDefaultBaseUrl || undefined,
-    }),
+
+  // Ask the server to synthesize, with a fallback chain of other configured TTS providers.
+  // On terminal server failure the helper plays via Web Speech so audio still happens; in that
+  // case we skip the IndexedDB blob persistence because we don't have bytes to store.
+  const result = await requestTTSAudio({
+    text,
+    audioId,
+    ttsProviderId: settings.ttsProviderId,
+    ttsModelId: ttsProviderConfig?.modelId,
+    ttsVoice: settings.ttsVoice,
+    ttsSpeed: settings.ttsSpeed,
+    ttsApiKey: ttsProviderConfig?.apiKey || undefined,
+    ttsBaseUrl:
+      ttsProviderConfig?.baseUrl || ttsProviderConfig?.customDefaultBaseUrl || undefined,
+    fallbackProviderIds: deriveTTSFallbackChain(
+      settings.ttsProviderId,
+      settings.ttsProvidersConfig ?? {},
+    ),
     signal,
   });
 
-  const data = await response
-    .json()
-    .catch(() => ({ success: false, error: response.statusText || 'Invalid TTS response' }));
-  if (!response.ok || !data.success || !data.base64 || !data.format) {
-    const err = new Error(
-      data.details || data.error || `TTS request failed: HTTP ${response.status}`,
-    );
-    log.warn('TTS failed for', audioId, ':', err);
-    throw err;
+  if (result.source === 'browser-native') {
+    log.warn(`TTS fell back to browser-native for audioId=${audioId}: ${result.reason}`);
+    if (shouldShowDegradationToast()) {
+      toast.warning('Voice narration degraded to your browser voice', {
+        description: 'Your configured TTS provider failed. Check API keys or network in Settings.',
+      });
+    }
+    return;
   }
 
-  const binary = atob(data.base64);
+  if (result.fallbackUsed && shouldShowDegradationToast()) {
+    toast.message(`Voice generated via fallback: ${result.fallbackUsed}`, {
+      description: `The primary provider (${settings.ttsProviderId}) was unavailable.`,
+    });
+  }
+
+  const binary = atob(result.base64);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) {
     bytes[i] = binary.charCodeAt(i);
   }
-  const blob = new Blob([bytes], { type: `audio/${data.format}` });
+  const blob = new Blob([bytes], { type: `audio/${result.format}` });
   await db.audioFiles.put({
     id: audioId,
     blob,
-    format: data.format,
+    format: result.format,
     createdAt: Date.now(),
   });
 }

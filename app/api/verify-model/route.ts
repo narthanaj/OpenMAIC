@@ -2,10 +2,15 @@ import { NextRequest } from 'next/server';
 import { generateText } from 'ai';
 import { createLogger } from '@/lib/logger';
 import { apiError, apiSuccess } from '@/lib/server/api-response';
+import { applyRateLimit } from '@/lib/server/rate-limit';
+import { apiErrorFromUpstream } from '@/lib/server/upstream-error';
 import { resolveModel } from '@/lib/server/resolve-model';
 const log = createLogger('Verify Model');
 
 export async function POST(req: NextRequest) {
+  const rateLimited = applyRateLimit('verify', req);
+  if (rateLimited) return rateLimited;
+
   let model: string | undefined;
   try {
     const body = await req.json();
@@ -46,25 +51,8 @@ export async function POST(req: NextRequest) {
     });
   } catch (error) {
     log.error(`Model verification failed [model="${model ?? 'unknown'}"]:`, error);
-
-    let errorMessage = 'Connection failed';
-    if (error instanceof Error) {
-      // Parse common error messages
-      if (error.message.includes('401') || error.message.includes('Unauthorized')) {
-        errorMessage = 'API key is invalid or expired';
-      } else if (error.message.includes('404') || error.message.includes('not found')) {
-        errorMessage = 'Model not found or API endpoint error';
-      } else if (error.message.includes('429')) {
-        errorMessage = 'API rate limit exceeded, please try again later';
-      } else if (error.message.includes('ENOTFOUND') || error.message.includes('ECONNREFUSED')) {
-        errorMessage = 'Cannot connect to API server, please check the Base URL';
-      } else if (error.message.includes('timeout')) {
-        errorMessage = 'Connection timed out, please check your network';
-      } else {
-        errorMessage = error.message;
-      }
-    }
-
-    return apiError('INTERNAL_ERROR', 500, errorMessage);
+    // Forward the vendor's real HTTP status (401/402/404/429/5xx) and payload to the client.
+    // Replaces the previous string-sniffing branches that all returned 500.
+    return apiErrorFromUpstream(error, { defaultCode: 'UPSTREAM_ERROR' });
   }
 }

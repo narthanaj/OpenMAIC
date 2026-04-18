@@ -44,6 +44,13 @@ COPY --from=builder /app/public ./public
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 
+# Pre-create the default DATA_DIR and its subdirs owned by the nextjs user. Docker copies these
+# contents + ownership to a newly-mounted named volume on first attach, so the app can write
+# classroom JSON/audio/media without a manual chown. Does not affect bind mounts or pre-existing
+# volumes — those still need host-side `chown -R 1001:1001 <path>` (see .env.example "Storage").
+RUN mkdir -p /app/data/classrooms /app/data/classroom-jobs && \
+    chown -R nextjs:nodejs /app/data
+
 USER nextjs
 
 EXPOSE 3000

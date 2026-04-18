@@ -11,6 +11,8 @@ import { searchWithTavily, formatSearchResultsAsContext } from '@/lib/web-search
 import { resolveWebSearchApiKey } from '@/lib/server/provider-config';
 import { createLogger } from '@/lib/logger';
 import { apiError, apiSuccess } from '@/lib/server/api-response';
+import { applyRateLimit } from '@/lib/server/rate-limit';
+import { apiErrorFromUpstream } from '@/lib/server/upstream-error';
 import {
   buildSearchQuery,
   SEARCH_QUERY_REWRITE_EXCERPT_LENGTH,
@@ -21,6 +23,9 @@ import type { AICallFn } from '@/lib/generation/pipeline-types';
 const log = createLogger('WebSearch');
 
 export async function POST(req: NextRequest) {
+  const rateLimited = applyRateLimit('web_search', req);
+  if (rateLimited) return rateLimited;
+
   let query: string | undefined;
   try {
     const body = await req.json();
@@ -93,7 +98,6 @@ export async function POST(req: NextRequest) {
     });
   } catch (err) {
     log.error(`Web search failed [query="${query?.substring(0, 60) ?? 'unknown'}"]:`, err);
-    const message = err instanceof Error ? err.message : 'Web search failed';
-    return apiError('INTERNAL_ERROR', 500, message);
+    return apiErrorFromUpstream(err, { defaultCode: 'UPSTREAM_ERROR' });
   }
 }

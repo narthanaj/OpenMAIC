@@ -1,6 +1,8 @@
 import { NextRequest } from 'next/server';
 import { createLogger } from '@/lib/logger';
 import { apiError, apiSuccess } from '@/lib/server/api-response';
+import { applyRateLimit } from '@/lib/server/rate-limit';
+import { apiErrorFromUpstream } from '@/lib/server/upstream-error';
 import { resolvePDFApiKey, resolvePDFBaseUrl } from '@/lib/server/provider-config';
 import { validateUrlForSSRF } from '@/lib/server/ssrf-guard';
 import { MINERU_CLOUD_DEFAULT_BASE } from '@/lib/pdf/constants';
@@ -8,6 +10,9 @@ import { MINERU_CLOUD_DEFAULT_BASE } from '@/lib/pdf/constants';
 const log = createLogger('Verify PDF Provider');
 
 export async function POST(req: NextRequest) {
+  const rateLimited = applyRateLimit('verify', req);
+  if (rateLimited) return rateLimited;
+
   let providerId: string | undefined;
   try {
     const body = await req.json();
@@ -106,20 +111,6 @@ export async function POST(req: NextRequest) {
     });
   } catch (error) {
     log.error(`PDF provider verification failed [provider=${providerId ?? 'unknown'}]:`, error);
-
-    let errorMessage = 'Connection failed';
-    if (error instanceof Error) {
-      if (error.message.includes('ECONNREFUSED')) {
-        errorMessage = 'Cannot connect to server, please check the Base URL';
-      } else if (error.message.includes('ENOTFOUND')) {
-        errorMessage = 'Server not found, please check the Base URL';
-      } else if (error.message.includes('timeout') || error.name === 'TimeoutError') {
-        errorMessage = 'Connection timed out';
-      } else {
-        errorMessage = error.message;
-      }
-    }
-
-    return apiError('INTERNAL_ERROR', 500, errorMessage);
+    return apiErrorFromUpstream(error, { defaultCode: 'UPSTREAM_ERROR' });
   }
 }

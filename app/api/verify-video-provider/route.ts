@@ -19,12 +19,17 @@ import { testVideoConnectivity } from '@/lib/media/video-providers';
 import { resolveVideoApiKey, resolveVideoBaseUrl } from '@/lib/server/provider-config';
 import type { VideoProviderId } from '@/lib/media/types';
 import { apiError, apiSuccess } from '@/lib/server/api-response';
+import { applyRateLimit } from '@/lib/server/rate-limit';
+import { apiErrorFromUpstream } from '@/lib/server/upstream-error';
 import { createLogger } from '@/lib/logger';
 import { validateUrlForSSRF } from '@/lib/server/ssrf-guard';
 
 const log = createLogger('VerifyVideoProvider');
 
 export async function POST(request: NextRequest) {
+  const rateLimited = applyRateLimit('verify', request);
+  if (rateLimited) return rateLimited;
+
   try {
     const providerId = (request.headers.get('x-video-provider') || 'seedance') as VideoProviderId;
     const model = request.headers.get('x-video-model') || undefined;
@@ -64,6 +69,6 @@ export async function POST(request: NextRequest) {
       `Video provider verification failed [provider=${request.headers.get('x-video-provider') ?? 'seedance'}]:`,
       err,
     );
-    return apiError('INTERNAL_ERROR', 500, `Connectivity test error: ${err}`);
+    return apiErrorFromUpstream(err, { defaultCode: 'UPSTREAM_ERROR' });
   }
 }

@@ -10,6 +10,7 @@ import { createLogger } from '@/lib/logger';
 import { PROVIDERS } from './providers';
 import { thinkingContext } from './thinking-context';
 import type { ProviderType, ThinkingCapability, ThinkingConfig } from '@/lib/types/provider';
+import { withSpan } from '@/lib/observability/tracing';
 const log = createLogger('LLM');
 
 // Re-export for external use
@@ -305,8 +306,29 @@ export async function callLLM<T extends GenerateTextParams>(
       // Wrap in thinkingContext so the custom fetch wrapper in providers.ts
       // can read the config and inject vendor-specific body params for
       // OpenAI-compatible providers.
-      const result = await thinkingContext.run(effectiveThinking, () =>
-        generateText(injectedParams),
+      // One `llm.call` span per attempt — retry loop becomes sibling spans in the trace.
+      const result = await withSpan(
+        'llm.call',
+        {
+          'llm.source': source,
+          'llm.model': getModelId(params),
+          'llm.attempt': attempt,
+          'llm.max_attempts': maxAttempts,
+          'llm.thinking_enabled': effectiveThinking !== undefined,
+        },
+        async (span) => {
+          const r = await thinkingContext.run(effectiveThinking, () =>
+            generateText(injectedParams),
+          );
+          // After the call, annotate with usage so Tempo searches can filter by cost/length.
+          if (r.usage?.totalTokens !== undefined)
+            span.setAttribute('llm.tokens_total', r.usage.totalTokens);
+          if (r.usage?.inputTokens !== undefined)
+            span.setAttribute('llm.tokens_input', r.usage.inputTokens);
+          if (r.usage?.outputTokens !== undefined)
+            span.setAttribute('llm.tokens_output', r.usage.outputTokens);
+          return r;
+        },
       );
 
       // Validate result (only when retries are configured)

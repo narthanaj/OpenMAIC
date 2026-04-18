@@ -21,6 +21,7 @@ import { resolveImageApiKey, resolveImageBaseUrl } from '@/lib/server/provider-c
 import type { ImageProviderId, ImageGenerationOptions } from '@/lib/media/types';
 import { createLogger } from '@/lib/logger';
 import { apiError, apiSuccess } from '@/lib/server/api-response';
+import { applyRateLimit } from '@/lib/server/rate-limit';
 import { validateUrlForSSRF } from '@/lib/server/ssrf-guard';
 
 const log = createLogger('ImageGeneration API');
@@ -28,6 +29,9 @@ const log = createLogger('ImageGeneration API');
 export const maxDuration = 60;
 
 export async function POST(request: NextRequest) {
+  const rateLimited = applyRateLimit('media', request);
+  if (rateLimited) return rateLimited;
+
   try {
     const body = (await request.json()) as ImageGenerationOptions;
 

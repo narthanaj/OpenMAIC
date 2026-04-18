@@ -17,6 +17,7 @@ import type { AgentInfo } from '@/lib/generation/generation-pipeline';
 import type { SceneOutline, PdfImage, ImageMapping } from '@/lib/types/generation';
 import { createLogger } from '@/lib/logger';
 import { apiError, apiSuccess } from '@/lib/server/api-response';
+import { applyRateLimit } from '@/lib/server/rate-limit';
 import { resolveModelFromHeaders } from '@/lib/server/resolve-model';
 
 const log = createLogger('Scene Content API');
@@ -24,6 +25,9 @@ const log = createLogger('Scene Content API');
 export const maxDuration = 300;
 
 export async function POST(req: NextRequest) {
+  const rateLimited = applyRateLimit('generate', req);
+  if (rateLimited) return rateLimited;
+
   let outlineTitle: string | undefined;
   let resolvedModelString: string | undefined;
   try {
