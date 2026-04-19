@@ -20,6 +20,8 @@
 let uploadedFile = null;
 /** @type {unknown | null} */
 let parsedClassroom = null;
+/** @type {{audio: Record<string, Blob>, media: Record<string, Blob>} | null} — bundle from a .maic.zip upload (α.2 exporter consumes this) */
+let uploadedBundle = null;
 /** @type {string | null} — 'scorm1.2' | 'html' */
 let currentLocalFormat = null;
 
@@ -181,41 +183,109 @@ async function onFileChange(ev) {
   if (!file) {
     uploadedFile = null;
     parsedClassroom = null;
+    uploadedBundle = null;
     setLocalFileStatus('', '');
     refreshExportButtonEnabled();
     return;
   }
-  if (file.size > 100 * 1024 * 1024) {
-    setLocalFileStatus('err', `File is ${(file.size / 1024 / 1024).toFixed(0)} MB — larger than 100 MB is not supported`);
+  if (file.size > 500 * 1024 * 1024) {
+    // Raised the ceiling from 100 to 500 MB for .maic.zip bundles carrying audio.
+    setLocalFileStatus('err', `File is ${(file.size / 1024 / 1024).toFixed(0)} MB — larger than 500 MB is not supported`);
     uploadedFile = null;
     parsedClassroom = null;
+    uploadedBundle = null;
     refreshExportButtonEnabled();
     return;
   }
   try {
-    setLocalFileStatus('', `Reading ${file.name} (${(file.size / 1024).toFixed(0)} KB)…`);
-    const text = await file.text();
-    const obj = JSON.parse(text);
-    const sniff = sniffClassroom(obj);
-    if (!sniff.ok) {
-      setLocalFileStatus('err', `✗ ${file.name} rejected: ${sniff.reason}`);
-      uploadedFile = null;
-      parsedClassroom = null;
+    setLocalFileStatus('', `Reading ${file.name} (${(file.size / 1024 / 1024).toFixed(1)} MB)…`);
+
+    // Branch on extension: .zip / .maic.zip → OpenMAIC's ClassroomManifest bundle;
+    // .json → legacy single-file classroom (v0.1.0 compatibility).
+    const lower = file.name.toLowerCase();
+    if (lower.endsWith('.zip')) {
+      const { parseMaicZip, bundleSummary } = await import('./manifest-adapter.js');
+      const { classroom, bundle } = await parseMaicZip(file);
+      const sniff = sniffClassroom(classroom);
+      if (!sniff.ok) {
+        setLocalFileStatus('err', `✗ ${file.name} — manifest rejected: ${sniff.reason}`);
+        uploadedFile = null;
+        parsedClassroom = null;
+        uploadedBundle = null;
+      } else {
+        uploadedFile = file;
+        parsedClassroom = classroom;
+        uploadedBundle = bundle;
+        const { audioCount, mediaCount, totalBytes } = bundleSummary(bundle);
+        const sceneCount = classroom.scenes.length;
+        const bundleMb = (totalBytes / 1024 / 1024).toFixed(1);
+        setLocalFileStatus(
+          'ok',
+          `✓ ${file.name} — ${sceneCount} scene${sceneCount === 1 ? '' : 's'}, ${audioCount} audio, ${mediaCount} media (${bundleMb} MB bundled)`,
+        );
+        $localPaste.value = '';
+      }
     } else {
-      uploadedFile = file;
-      parsedClassroom = sniff.classroom;
-      const sceneCount = sniff.classroom.scenes.length;
-      setLocalFileStatus(
-        'ok',
-        `✓ ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB) parsed — ${sceneCount} scene${sceneCount === 1 ? '' : 's'}`,
-      );
-      // Clear any textarea content so we know which source the submit uses.
-      $localPaste.value = '';
+      // .json path — could be either:
+      //   (a) the single-file output of the DevTools console snippet, which
+      //       embeds audio/media as base64 in _embeddedAudio / _embeddedMedia;
+      //   (b) a legacy plain-classroom .json from v0.1.0 (text-only).
+      // looksLikeEmbeddedBundle decides which parser to invoke.
+      const text = await file.text();
+      let obj;
+      try {
+        obj = JSON.parse(text);
+      } catch (err) {
+        throw new Error(`not valid JSON: ${err.message}`);
+      }
+      const { looksLikeEmbeddedBundle, parseEmbeddedJson, bundleSummary } = await import('./manifest-adapter.js');
+      if (looksLikeEmbeddedBundle(obj)) {
+        const { classroom, bundle } = await parseEmbeddedJson(text);
+        const sniff = sniffClassroom(classroom);
+        if (!sniff.ok) {
+          setLocalFileStatus('err', `✗ ${file.name} — manifest rejected: ${sniff.reason}`);
+          uploadedFile = null;
+          parsedClassroom = null;
+          uploadedBundle = null;
+        } else {
+          uploadedFile = file;
+          parsedClassroom = classroom;
+          uploadedBundle = bundle;
+          const { audioCount, mediaCount, totalBytes } = bundleSummary(bundle);
+          const sceneCount = classroom.scenes.length;
+          const bundleMb = (totalBytes / 1024 / 1024).toFixed(1);
+          setLocalFileStatus(
+            'ok',
+            `✓ ${file.name} — ${sceneCount} scene${sceneCount === 1 ? '' : 's'}, ${audioCount} audio, ${mediaCount} media (${bundleMb} MB decoded)`,
+          );
+          $localPaste.value = '';
+        }
+      } else {
+        // Legacy plain-classroom JSON.
+        const sniff = sniffClassroom(obj);
+        if (!sniff.ok) {
+          setLocalFileStatus('err', `✗ ${file.name} rejected: ${sniff.reason}`);
+          uploadedFile = null;
+          parsedClassroom = null;
+          uploadedBundle = null;
+        } else {
+          uploadedFile = file;
+          parsedClassroom = sniff.classroom;
+          uploadedBundle = null;
+          const sceneCount = sniff.classroom.scenes.length;
+          setLocalFileStatus(
+            'ok',
+            `✓ ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB) parsed — ${sceneCount} scene${sceneCount === 1 ? '' : 's'} — no audio bundle (upload .maic.zip or embedded .classroom.json for narration)`,
+          );
+          $localPaste.value = '';
+        }
+      }
     }
   } catch (err) {
-    setLocalFileStatus('err', `✗ ${file.name}: ${err.message ?? 'invalid JSON'}`);
+    setLocalFileStatus('err', `✗ ${file.name}: ${err.message ?? 'could not parse'}`);
     uploadedFile = null;
     parsedClassroom = null;
+    uploadedBundle = null;
   }
   refreshExportButtonEnabled();
 }
@@ -227,6 +297,7 @@ function onPasteChange() {
     // Paste cleared — fall back to any uploaded file, else nothing.
     if (!uploadedFile) {
       parsedClassroom = null;
+      uploadedBundle = null;
       setLocalFileStatus('', '');
     }
     refreshExportButtonEnabled();
@@ -238,15 +309,18 @@ function onPasteChange() {
     if (!sniff.ok) {
       setLocalFileStatus('err', `✗ Pasted JSON rejected: ${sniff.reason}`);
       parsedClassroom = null;
+      uploadedBundle = null;
     } else {
       uploadedFile = null;
       parsedClassroom = sniff.classroom;
-      setLocalFileStatus('ok', `✓ Pasted classroom parsed — ${sniff.classroom.scenes.length} scenes`);
+      uploadedBundle = null; // paste path has no bundle — text-only export
+      setLocalFileStatus('ok', `✓ Pasted classroom parsed — ${sniff.classroom.scenes.length} scenes (no audio bundle)`);
       $localFile.value = ''; // clear the file input visually
     }
   } catch (err) {
     setLocalFileStatus('err', `✗ Pasted JSON: ${err.message ?? 'parse error'}`);
     parsedClassroom = null;
+    uploadedBundle = null;
   }
   refreshExportButtonEnabled();
 }

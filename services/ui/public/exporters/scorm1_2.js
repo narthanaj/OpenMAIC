@@ -10,6 +10,13 @@
 // JSZip is a peer dependency loaded via a <script> tag in index.html; we reference
 // it as `globalThis.JSZip` to avoid hard-coding `window.` (Node parity-test has no window).
 
+import {
+  normalizeSceneTimeline,
+  renderTimelineGateDom,
+  TIMELINE_CSS,
+  TIMELINE_RUNTIME_JS,
+} from './shared-timeline.js';
+
 // ---- Inline SCORM 1.2 runtime shim (lands as runtime.js inside the ZIP). ----
 // MUST stay byte-for-byte identical to the backend's scorm1_2/runtime.ts export.
 // The parity test enforces this; any change here must land on the backend too.
@@ -104,29 +111,41 @@ function xmlEscape(s) {
     .replace(/'/g, '&apos;');
 }
 
+function jsonForInlineScript(v) {
+  return JSON.stringify(v).replace(/</g, '\\u003c');
+}
+
 const SHARED_CSS = `
   body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; max-width: 900px; margin: 0 auto; padding: 2rem; color: #1a1a1a; line-height: 1.6; }
   .progress { font-size: 0.875rem; color: #6a6a6a; margin-bottom: 1rem; }
   h1 { font-size: 2rem; margin: 0 0 1.5rem; color: #0a0a0a; }
   .narration p { font-size: 1.125rem; margin: 0 0 1rem; }
+  .narration audio { display: block; margin: 0 0 1.25rem; width: 100%; max-width: 540px; }
   nav.scorm-nav { margin-top: 3rem; padding-top: 1.5rem; border-top: 1px solid #e0e0e0; display: flex; justify-content: space-between; gap: 1rem; }
   nav.scorm-nav a { padding: 0.5rem 1rem; background: #f3f3f3; border-radius: 4px; text-decoration: none; color: #1a1a1a; }
   nav.scorm-nav a[aria-disabled="true"] { visibility: hidden; }
   nav.scorm-nav a:hover { background: #e0e0e0; }
 `;
 
-function speechTexts(scene) {
-  return (scene.actions ?? [])
-    .filter((a) => a && a.type === 'speech' && typeof a.text === 'string')
-    .map((a) => a.text)
-    .filter((t) => t.trim().length > 0);
+function speechEntriesFor(timeline) {
+  return timeline.filter((e) => e && e.type === 'speech' && e.text && e.text.trim().length > 0);
 }
 
 function renderSceneHtml(scene, opts) {
   const title = escapeHtml(opts.title);
-  const speeches = speechTexts(scene).map(escapeHtml);
-  const narrationHtml = speeches.length
-    ? `<div class="narration">${speeches.map((t) => `<p>${t}</p>`).join('\n      ')}</div>`
+  const timeline = normalizeSceneTimeline(scene, opts.availableAudio);
+  const speechEntries = speechEntriesFor(timeline);
+  const narrationHtml = speechEntries.length
+    ? `<div class="narration">\n      ${speechEntries
+        .map((e) => {
+          const captionId = escapeHtml(e.captionElementId || '');
+          const textP = `<p id="${captionId}">${escapeHtml(e.text || '')}</p>`;
+          const audio = e.audio && e.audioElementId
+            ? `\n        <audio id="${escapeHtml(e.audioElementId)}" preload="metadata" src="${escapeHtml(e.audio)}"></audio>`
+            : '';
+          return `${textP}${audio}`;
+        })
+        .join('\n      ')}\n    </div>`
     : `<div class="narration"><p><em>(This slide has no narration.)</em></p></div>`;
   const prev = opts.prevHref
     ? `<a href="${escapeHtml(opts.prevHref)}">&larr; Previous</a>`
@@ -141,9 +160,11 @@ function renderSceneHtml(scene, opts) {
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>${title}</title>
-  <style>${SHARED_CSS}</style>
+  <style>${SHARED_CSS}${TIMELINE_CSS}</style>
   <script>window.__SCORM_SLIDE__ = { index: ${opts.index}, total: ${opts.total}, isLast: ${isLast} };</script>
+  <script type="application/json" id="timeline">${jsonForInlineScript(timeline)}</script>
   <script src="runtime.js" defer></script>
+  <script src="../timeline.js" defer></script>
 </head>
 <body>
   <p class="progress">Slide ${opts.index + 1} of ${opts.total}</p>
@@ -153,6 +174,7 @@ function renderSceneHtml(scene, opts) {
     ${prev}
     ${next}
   </nav>
+  ${renderTimelineGateDom()}
 </body>
 </html>`;
 }
@@ -169,19 +191,26 @@ function renderEntryHtml(firstScene, language) {
 </html>`;
 }
 
-function buildManifest(classroom, sceneHrefs, entryHref, runtimeHref) {
-  const manifestId = `OpenMAIC-${classroom.id}`;
-  const orgId = `ORG-${classroom.id}`;
-  const entryResourceId = `RES-ENTRY-${classroom.id}`;
+function buildManifest(classroom, sceneHrefs, entryHref, runtimeHref, timelineHref, mediaPaths) {
+  // Mirror of backend manifest.ts — ids may be absent when the source is a
+  // ClassroomManifest (id-stripped). Mint deterministic fallbacks.
+  const classroomId = classroom.id ?? 'unnamed';
+  const manifestId = `OpenMAIC-${xmlEscape(classroomId)}`;
+  const orgId = `ORG-${xmlEscape(classroomId)}`;
+  const entryResourceId = `RES-ENTRY-${xmlEscape(classroomId)}`;
   const items = classroom.scenes
     .map((scene, i) => {
       const title = xmlEscape(scene.title ?? `Slide ${i + 1}`);
-      return `      <item identifier="ITEM-${xmlEscape(scene.id)}" identifierref="${entryResourceId}">
+      const itemId = scene.id ?? `scene-${i + 1}`;
+      return `      <item identifier="ITEM-${xmlEscape(itemId)}" identifierref="${entryResourceId}">
         <title>${title}</title>
       </item>`;
     })
     .join('\n');
-  const fileEntries = [entryHref, runtimeHref, ...sceneHrefs]
+  const allFiles = [entryHref, runtimeHref];
+  if (timelineHref) allFiles.push(timelineHref);
+  allFiles.push(...sceneHrefs, ...(mediaPaths ?? []));
+  const fileEntries = allFiles
     .map((href) => `      <file href="${xmlEscape(href)}"/>`)
     .join('\n');
   return `<?xml version="1.0" encoding="UTF-8"?>
@@ -223,14 +252,22 @@ function sceneHrefFor(index) {
  * Exposed separately from buildZipBlob so the parity test can diff entry-by-entry
  * with the backend's equivalent `buildZipFiles` output.
  */
-export function buildZipFiles(classroom, language) {
+export function buildZipFiles(classroom, language, mediaBundle) {
   const lang = language ?? classroom?.stage?.language ?? 'en';
   const scenes = [...classroom.scenes].sort((a, b) => a.order - b.order);
   const total = scenes.length;
   const sceneHrefs = scenes.map((_, i) => sceneHrefFor(i));
 
+  const availableAudio = new Set();
+  if (mediaBundle) {
+    for (const path of mediaBundle.keys()) {
+      if (path.startsWith('audio/')) availableAudio.add(path);
+    }
+  }
+
   const sceneFiles = scenes.map((scene, i) => ({
     path: sceneHrefs[i],
+    compression: 'DEFLATE',
     content: renderSceneHtml(scene, {
       title: (scene.title && scene.title.trim()) || `Slide ${i + 1}`,
       index: i,
@@ -238,17 +275,29 @@ export function buildZipFiles(classroom, language) {
       prevHref: i > 0 ? String(i).padStart(3, '0') + '.html' : null,
       nextHref: i < total - 1 ? String(i + 2).padStart(3, '0') + '.html' : null,
       language: lang,
+      availableAudio,
     }),
   }));
 
-  const manifest = buildManifest(classroom, sceneHrefs, 'index.html', 'runtime.js');
+  const mediaFiles = [];
+  const mediaPaths = [];
+  if (mediaBundle) {
+    for (const [path, buf] of mediaBundle) {
+      mediaFiles.push({ path, content: buf, compression: 'STORE' });
+      mediaPaths.push(path);
+    }
+  }
+
+  const manifest = buildManifest(classroom, sceneHrefs, 'index.html', 'runtime.js', 'timeline.js', mediaPaths);
   const entry = renderEntryHtml(sceneHrefs[0], lang);
 
   return [
-    { path: 'imsmanifest.xml', content: manifest },
-    { path: 'index.html', content: entry },
-    { path: 'runtime.js', content: SCORM_RUNTIME_JS },
+    { path: 'imsmanifest.xml', compression: 'DEFLATE', content: manifest },
+    { path: 'index.html', compression: 'DEFLATE', content: entry },
+    { path: 'runtime.js', compression: 'DEFLATE', content: SCORM_RUNTIME_JS },
+    { path: 'timeline.js', compression: 'DEFLATE', content: TIMELINE_RUNTIME_JS },
     ...sceneFiles,
+    ...mediaFiles,
   ];
 }
 
@@ -256,12 +305,15 @@ export function buildZipFiles(classroom, language) {
  * Produce a Blob (browser) of the SCORM 1.2 package for `classroom`.
  * Callers trigger a download by using URL.createObjectURL on the returned Blob.
  */
-export async function buildZipBlob(classroom, language) {
+export async function buildZipBlob(classroom, language, mediaBundle) {
   const JSZip = globalThis.JSZip;
   if (!JSZip) throw new Error('JSZip is not loaded — check that vendor/jszip.min.js is reachable');
   const zip = new JSZip();
-  for (const f of buildZipFiles(classroom, language)) {
-    zip.file(f.path, f.content);
+  for (const f of buildZipFiles(classroom, language, mediaBundle)) {
+    const opts = f.compression
+      ? { compression: f.compression, compressionOptions: f.compression === 'DEFLATE' ? { level: 6 } : undefined }
+      : undefined;
+    zip.file(f.path, f.content, opts);
   }
   return zip.generateAsync({
     type: 'blob',

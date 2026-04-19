@@ -42,6 +42,17 @@ const ConfigSchema = z.object({
 
   PORT: z.coerce.number().int().positive().default(4000),
   HOST: z.string().default('0.0.0.0'),
+
+  // Env-gated `global.gc()` after a large response finishes. Only useful when
+  // the `/from-bundle` route has been driving heap pressure — V8's LOS doesn't
+  // reclaim big allocations until a full GC cycle, so repeated ~100 MB bodies
+  // can fragment the heap into OOM even under nominal RSS. Requires the
+  // Dockerfile CMD to pass `--expose-gc`; otherwise `global.gc` is undefined
+  // and the hook is a no-op. Leave false by default.
+  EXPORTER_GC_ON_RESPONSE: z
+    .union([z.boolean(), z.string()])
+    .default(false)
+    .transform((v) => v === true || v === 'true' || v === '1'),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;

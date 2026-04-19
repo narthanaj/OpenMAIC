@@ -1,4 +1,5 @@
 import Fastify, { type FastifyInstance } from 'fastify';
+import underPressure from '@fastify/under-pressure';
 import { loadConfig, dbPathFor, storageRootFor, type Config } from './config.js';
 import { installAuth } from './auth.js';
 import { SqliteJobStore } from './jobs/store-sqlite.js';
@@ -9,6 +10,7 @@ import { createCleanup, type Cleanup } from './jobs/cleanup.js';
 import { registerHealthRoute } from './routes/health.js';
 import { registerMetricsRoute } from './routes/metrics.js';
 import { registerExportRoute } from './routes/export.js';
+import { registerExportFromBundleRoute } from './routes/export-from-bundle.js';
 import { registerJobsRoutes } from './routes/jobs.js';
 import { registerFormatsRoute } from './routes/formats.js';
 import { listExporters } from './exporters/registry.js';
@@ -34,10 +36,31 @@ export function buildServer(config: Config): BuiltServer {
   const app = Fastify({
     logger: {
       level: config.LOG_LEVEL,
+      // Redaction lives here (not in a serializer) because Pino evaluates the
+      // paths on EVERY log record including the automatic 400/500 error logs
+      // that include `req.body`. Without this, a rejected 100 MB /from-bundle
+      // POST would dump 100 MB of base64 into stdout — crashing Loki /
+      // Datadog / any downstream aggregator that buffers log lines in memory.
+      // The `.*` suffixes redact each map entry individually (otherwise Pino
+      // serializes the entire `_embeddedAudio` object first, then redacts the
+      // string — the intermediate string is already huge).
+      redact: {
+        paths: [
+          'req.body._embeddedAudio',
+          'req.body._embeddedMedia',
+          'req.body._embeddedAudio.*',
+          'req.body._embeddedMedia.*',
+          'body._embeddedAudio',
+          'body._embeddedMedia',
+          'body._embeddedAudio.*',
+          'body._embeddedMedia.*',
+        ],
+        censor: '[redacted: embedded blob]',
+      },
     },
-    // bodyLimit stays at Fastify's default (1 MB). Pull-mode request bodies are
-    // ~100 bytes ({classroomId, webhookUrl?}); big payloads went away when the
-    // UI moved to local-first browser-side zipping.
+    // Global bodyLimit stays at Fastify's default (1 MB). Pull-mode request
+    // bodies are ~100 bytes; big payloads only land on the /from-bundle route
+    // which sets its own `bodyLimit: 100_000_000` in its route opts.
     // routerOptions.ignoreTrailingSlash makes /export and /export/ equivalent —
     // defensive against any nginx rewrite asymmetry. Fastify 5+ nests router flags
     // under `routerOptions`; passing `ignoreTrailingSlash` top-level logs a
@@ -45,6 +68,13 @@ export function buildServer(config: Config): BuiltServer {
     routerOptions: {
       ignoreTrailingSlash: true,
     },
+    // Upload timeouts. A 100 MB body over consumer broadband (~10 Mbps up)
+    // takes ~80 s just for the wire transfer; default Fastify connectionTimeout
+    // (10 s) would cut this off before the body reached the handler. 300 s
+    // matches the curl --max-time 300 documented in the README — clients that
+    // respect this alignment should never see a timeout mismatch.
+    connectionTimeout: 300_000,
+    keepAliveTimeout: 300_000,
   });
 
   // Wire persistence.
@@ -78,6 +108,33 @@ export function buildServer(config: Config): BuiltServer {
     logger: app.log,
   });
 
+  // Backpressure. Peak memory on one /from-bundle request with a 100 MB body
+  // sits around 300-400 MB (raw JSON string + parsed object tree + decoded
+  // Buffers + JSZip staging). Two concurrent requests can trip an OOM on a
+  // 1 GB container even with healthy headroom; under-pressure returns 503 +
+  // Retry-After before that happens. The health endpoint stays green — we
+  // don't want K8s-style liveness probes to restart the pod just because we
+  // politely declined a concurrent export.
+  //
+  // register returns a promise; we await it during buildServer via top-level
+  // await isn't available in a plain function, so we fire-and-forget here.
+  // Any registration error surfaces via Fastify's own logs.
+  void app.register(underPressure, {
+    maxEventLoopDelay: 1000,
+    maxHeapUsedBytes: 512_000_000,
+    maxRssBytes: 900_000_000,
+    maxEventLoopUtilization: 0.98,
+    message: 'Exporter under heap pressure — retry later',
+    retryAfter: 30,
+    // Plugin enforces: if healthCheck is set, either healthCheckInterval or
+    // exposeStatusRoute must be set too. We don't expose /status (our own
+    // /health route is the canonical liveness endpoint), so we just set a
+    // low-frequency interval; the check itself is a no-op returning true.
+    healthCheck: async () => true,
+    healthCheckInterval: 60_000,
+    exposeStatusRoute: false,
+  });
+
   // Auth goes before routes so preHandler runs on all of them uniformly.
   installAuth(app, {
     token: config.EXPORTER_AUTH_TOKEN,
@@ -90,6 +147,7 @@ export function buildServer(config: Config): BuiltServer {
   void registerMetricsRoute(app, { store });
   void registerFormatsRoute(app);
   void registerExportRoute(app, { store, workers });
+  void registerExportFromBundleRoute(app, { config });
   void registerJobsRoutes(app, { store, storage });
 
   return { app, store, workers, cleanup, config };

@@ -9,6 +9,12 @@ export interface ExportOptions {
   title?: string;
   // Optional language tag for SCORM/xAPI metadata. Defaults to classroom.stage.language ?? 'en'.
   language?: string;
+  // Binary blobs keyed by in-ZIP path (`audio/<id>.mp3`, `media/<id>.png`). When
+  // present, the exporter copies them into the output ZIP with STORE compression
+  // (they're already compressed; DEFLATE is wasted CPU). Populated by the
+  // /from-bundle route after decoding the classroom manifest's _embeddedAudio /
+  // _embeddedMedia base64 maps; empty/undefined for the legacy pull-mode path.
+  mediaBundle?: Map<string, Buffer>;
   // Reserved for format-specific options. Formats should namespace under their id.
   extra?: Record<string, unknown>;
 }

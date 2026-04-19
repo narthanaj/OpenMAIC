@@ -26,12 +26,19 @@ export interface ManifestInputs {
   entryHref: string;        // typically "index.html"
   sceneHrefs: string[];     // in scene-order, same length as classroom.scenes
   runtimeHref: string;      // typically "runtime.js"
+  // α.3 — timeline playback engine. Optional so pre-α.3 callers keep working;
+  // listed alongside runtimeHref in the resource dependency set.
+  timelineHref?: string;
   // Language for <lom> metadata; defaults to classroom.stage.language ?? 'en'.
   language: string;
+  // In-ZIP paths of every audio/media blob that was bundled. Listed in the
+  // SCORM `<resource>` file set so LMSs that verify package integrity don't
+  // flag the audio dependencies as orphans. Empty for non-bundle exports.
+  mediaPaths?: string[];
 }
 
 export function buildManifest(inputs: ManifestInputs): string {
-  const { classroom, entryHref, sceneHrefs, runtimeHref, language } = inputs;
+  const { classroom, entryHref, sceneHrefs, runtimeHref, timelineHref, mediaPaths = [] } = inputs;
 
   if (sceneHrefs.length !== classroom.scenes.length) {
     throw new Error(
@@ -39,19 +46,26 @@ export function buildManifest(inputs: ManifestInputs): string {
     );
   }
 
-  const manifestId = `OpenMAIC-${classroom.id}`;
-  const orgId = `ORG-${classroom.id}`;
-  const entryResourceId = `RES-ENTRY-${classroom.id}`;
+  // ClassroomManifest (.maic.zip / .classroom.json) strips every `id` field
+  // because the export format is id-independent — scenes/stage/classroom
+  // get re-keyed on the consumer side. We mint deterministic fallbacks here
+  // so the manifest XML is always well-formed. Index-based IDs are stable
+  // for a single classroom's scenes (scene order IS the identity).
+  const classroomId = classroom.id ?? 'unnamed';
+  const manifestId = `OpenMAIC-${xmlEscape(classroomId)}`;
+  const orgId = `ORG-${xmlEscape(classroomId)}`;
+  const entryResourceId = `RES-ENTRY-${xmlEscape(classroomId)}`;
 
   // Items are the table-of-contents tree the LMS renders. For v1 we keep it flat
   // (no nesting) — every scene is a top-level item under the single organization.
   const items = classroom.scenes
     .map((scene, i) => {
       const title = xmlEscape(scene.title ?? `Slide ${i + 1}`);
+      const itemId = scene.id ?? `scene-${i + 1}`;
       // All items point at the same resource (entry), but with parameters the runtime
       // could use later. For v1 simplicity, every item launches the same entry and
       // navigation is handled by prev/next links within the scene HTMLs.
-      return `      <item identifier="ITEM-${xmlEscape(scene.id)}" identifierref="${entryResourceId}">
+      return `      <item identifier="ITEM-${xmlEscape(itemId)}" identifierref="${entryResourceId}">
         <title>${title}</title>
       </item>`;
     })
@@ -60,7 +74,10 @@ export function buildManifest(inputs: ManifestInputs): string {
   // The entry resource lists EVERY file in the package as a dependency — the LMS
   // unpacks the whole ZIP before launching, so missing file references here mostly
   // affect how the LMS computes "package integrity." Being thorough helps.
-  const fileEntries = [entryHref, runtimeHref, ...sceneHrefs]
+  const allFiles = [entryHref, runtimeHref];
+  if (timelineHref) allFiles.push(timelineHref);
+  allFiles.push(...sceneHrefs, ...mediaPaths);
+  const fileEntries = allFiles
     .map((href) => `      <file href="${xmlEscape(href)}"/>`)
     .join('\n');
 

@@ -38,12 +38,18 @@ const FIXTURE: Classroom = {
       actions: [{ type: 'speech', id: 'sp1', text: 'Hello from scene one.' } as any],
     },
     {
+      // α.3 — multi-action scene exercises the timeline normalizer on every
+      // action category (speech, fire-and-forget, whiteboard sync). Any drift
+      // in duration constants or entry fields between backend + UI trips here.
       id: 'sc2',
       order: 1,
       title: 'Second Slide',
       actions: [
         { type: 'speech', id: 'sp2', text: 'Hello from scene two.' } as any,
-        { type: 'other', id: 'o1' } as any, // non-speech action — exporters should ignore
+        { type: 'spotlight', id: 'spot1', elementId: 'target1', dimOpacity: 0.4 } as any,
+        { type: 'wb_draw_text', id: 'dt1', content: 'Board note', x: 10, y: 10 } as any,
+        { type: 'speech', id: 'sp3', text: 'Back to narration.' } as any,
+        { type: 'other', id: 'o1' } as any, // unknown type — both exporters drop it
       ],
     },
     {

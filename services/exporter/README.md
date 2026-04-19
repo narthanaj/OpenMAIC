@@ -6,12 +6,15 @@ Content export sidecar for OpenMAIC classrooms. Packages classroom data into LMS
 
 | Format | Status | Notes |
 |---|---|---|
-| **SCORM 1.2** | ✅ v1 | Slides-only HTML. Audio/quiz-score wiring planned for v2. |
+| **SCORM 1.2** | ✅ v0.1 + partial v0.2 | Slides + narration audio + action-timeline playback runtime. Quiz scoring, whiteboard rendering, and spotlight overlays land in the rest of v0.2 (see [ALPHA_PROGRESS.md](./ALPHA_PROGRESS.md)). |
+| **Static HTML** | ✅ v0.1 + partial v0.2 | Same features as SCORM minus the LMS shim — self-contained folder deployable to any static host. |
 | SCORM 2004 | planned | |
 | xAPI / cmi5 | planned | |
 | H5P | planned | |
 
 New formats drop in as sibling plugins under `src/exporters/<format>/` implementing the `ContentExporter` interface — no changes to the core framework.
+
+**v0.2.0-α status** (action-level session fidelity): α.1 manifest input + α.2 audio bundling + α.3 action-timeline runtime shipped. α.4 quiz widget + SCORM scoring, α.5 slide rendering, α.6 spotlight/laser overlays still queued. Per-phase details in [ALPHA_PROGRESS.md](./ALPHA_PROGRESS.md).
 
 ## Quick start
 
@@ -97,6 +100,7 @@ All non-`/health` routes require `Authorization: Bearer <token>`.
 | Method | Path | Purpose |
 |---|---|---|
 | `POST` | `/export/:format` | Start a pull-mode export. Body: `{classroomId, webhookUrl?}`. Returns `202 {jobId}`. |
+| `POST` | `/export/:format/from-bundle` | **Sync** — accepts a ClassroomManifest body with `_embeddedAudio` / `_embeddedMedia` base64 maps and streams the ZIP back on the same connection. Per-route `bodyLimit: 100 MB`, 300 s timeouts, under-pressure gated. Use this when the classroom lives only in browser IndexedDB. |
 | `GET` | `/formats` | List available export formats. `{formats:[{id, name}]}`. |
 | `GET` | `/export/jobs?limit=N` | Recent jobs (newest first), default `limit=50`. |
 | `GET` | `/export/jobs/:id` | Job status. `{id, status, format, error?, ...}`. |
@@ -174,11 +178,13 @@ scrape_configs:
 
 ```bash
 cd services/exporter
-pnpm install
-pnpm dev         # tsx watch
-pnpm test        # vitest run
-pnpm typecheck   # tsc --noEmit
+pnpm install --ignore-workspace   # exporter has its own lockfile; the flag tells pnpm NOT to walk up to the parent workspace
+pnpm dev                          # tsx watch
+pnpm test                         # vitest run
+pnpm typecheck                    # tsc --noEmit
 ```
+
+**Parity with the browser exporter.** The backend renderers (`src/exporters/html/*.ts`, `src/exporters/scorm1_2/*.ts`, `src/exporters/shared/timeline.ts`) have byte-identical vanilla-JS siblings in `services/ui/public/exporters/{html,scorm1_2,shared-timeline}.js`. A parity test (`tests/unit/exporter-parity.test.ts`) diffs unpacked ZIP contents string-by-string. Any change to one side must land on the other — `pnpm test` will fail loudly if not.
 
 Run local with a test token and OpenMAIC on host:
 ```bash

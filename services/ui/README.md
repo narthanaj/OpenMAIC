@@ -10,47 +10,113 @@ You upload a `classroom.json` file (or paste it in). The browser parses it, buil
 
 This is the path you want when you have a classroom stored only in the browser's IndexedDB (standard for UI-generated OpenMAIC classrooms).
 
-**Extracting a classroom from OpenMAIC's IndexedDB.** The DB is named `MAIC-Database` (not `openmaic-db`), and classrooms aren't stored in a single store — they're split across a `stages` table (one row per classroom) and a `scenes` table (N rows per classroom, indexed on `stageId`). Clicking through DevTools → Application → IndexedDB is painful because you'd have to reconstruct the join manually. Use this console snippet instead: paste it into DevTools Console on any OpenMAIC page, it assembles the classroom into the shape the exporter expects and downloads a `.json` to `~/Downloads/`:
+**Getting a classroom out of OpenMAIC — two paths depending on your build:**
+
+**Path A: OpenMAIC's built-in "Export Classroom ZIP" button** — if you can find it. The v0.1.1 feature lives in the classroom header's Export dropdown next to PPTX / Resource Pack. Not every build wires it into the visible dropdown. If it's there, click it, get a `.maic.zip`, upload. Done.
+
+**Path B: DevTools console snippet** — if Path A isn't available in your build. Paste the snippet below into DevTools Console on any OpenMAIC page. It reads the IndexedDB tables, embeds every audio/media blob as base64 inside a single manifest JSON, and triggers one download. No CDN deps, no CSP issues, no multi-download rate-limiting, no OS-zip step.
 
 ```js
 (async () => {
-  const ID = 'YOUR_CLASSROOM_ID';   // change to your id; set to null for the first one
+  const STAGE_ID = 'YOUR_CLASSROOM_ID';   // change to your id; null = first classroom found
 
   const db = await new Promise((ok, no) => {
     const r = indexedDB.open('MAIC-Database');
     r.onsuccess = () => ok(r.result); r.onerror = () => no(r.error);
   });
-  const stage = await new Promise((ok, no) => {
-    const tx = db.transaction('stages', 'readonly').objectStore('stages');
-    const r = ID ? tx.get(ID) : tx.openCursor();
-    r.onsuccess = () => ok(ID ? r.result : (r.result?.value ?? null));
-    r.onerror = () => no(r.error);
+  const all = (store, query, idx) => new Promise((ok, no) => {
+    const tx = db.transaction(store, 'readonly');
+    const src = idx ? tx.objectStore(store).index(idx) : tx.objectStore(store);
+    const req = query ? src.getAll(query) : src.getAll();
+    req.onsuccess = () => ok(req.result); req.onerror = () => no(req.error);
   });
-  if (!stage) { console.error('No stage with id', ID); return; }
-  const scenes = await new Promise((ok, no) => {
-    const r = db.transaction('scenes', 'readonly').objectStore('scenes').index('stageId').getAll(stage.id);
-    r.onsuccess = () => ok(r.result); r.onerror = () => no(r.error);
+  const one = (store, key) => new Promise((ok, no) => {
+    const req = db.transaction(store, 'readonly').objectStore(store).get(key);
+    req.onsuccess = () => ok(req.result); req.onerror = () => no(req.error);
   });
-  const dir = (stage.languageDirective || '').toLowerCase();
-  const language =
-    /zh-?cn|chinese/.test(dir) ? 'zh-CN' :
-    /ja-?jp|japanese/.test(dir) ? 'ja-JP' :
-    /ru-?ru|russian/.test(dir) ? 'ru-RU' : 'en';
-  const classroom = {
-    id: stage.id,
-    stage: { id: stage.id, name: stage.name, description: stage.description, language },
-    scenes: [...scenes].sort((a, b) => a.order - b.order)
-      .map((s) => ({ id: s.id, order: s.order, title: s.title, actions: s.actions || [] })),
+  const b64 = (blob) => new Promise((ok, no) => {
+    const fr = new FileReader();
+    fr.onload = () => ok(fr.result);
+    fr.onerror = () => no(fr.error);
+    fr.readAsDataURL(blob);
+  });
+
+  const stage = STAGE_ID ? await one('stages', STAGE_ID) : (await all('stages'))[0];
+  if (!stage) { console.error('No stage found'); return; }
+  const scenes = (await all('scenes', stage.id, 'stageId')).sort((a, b) => a.order - b.order);
+  const generatedAgents = await all('generatedAgents', stage.id, 'stageId');
+  const mediaFiles = await all('mediaFiles', stage.id, 'stageId');
+
+  const audioIds = new Set();
+  for (const s of scenes) for (const a of s.actions ?? []) {
+    if (a.type === 'speech' && a.audioId) audioIds.add(a.audioId);
+  }
+  const audioRecords = [];
+  for (const id of audioIds) { const r = await one('audioFiles', id); if (r) audioRecords.push(r); }
+
+  const agents = (generatedAgents.length ? generatedAgents : stage.generatedAgentConfigs || [])
+    .map(a => ({ name: a.name, role: a.role, persona: a.persona, avatar: a.avatar, color: a.color, priority: a.priority }));
+  const agentIdToIndex = new Map();
+  (generatedAgents.length ? generatedAgents : stage.generatedAgentConfigs || [])
+    .forEach((a, i) => agentIdToIndex.set(a.id, i));
+  const audioIdToPath = new Map(audioRecords.map(r => [r.id, `audio/${r.id}.${r.format || 'mp3'}`]));
+
+  const manifestScenes = scenes.map(s => ({
+    type: s.type, title: s.title, order: s.order, content: s.content,
+    actions: (s.actions || []).map(a => {
+      if (a.type === 'speech') {
+        const { audioId, ...rest } = a;
+        const audioRef = audioId ? audioIdToPath.get(audioId) : undefined;
+        return { ...rest, ...(audioRef ? { audioRef } : {}) };
+      }
+      return a;
+    }),
+    whiteboards: s.whiteboards,
+    ...(s.multiAgent?.enabled
+      ? { multiAgent: { enabled: true, agentIndices: (s.multiAgent.agentIds || []).map(id => agentIdToIndex.get(id)).filter(i => i !== undefined), directorPrompt: s.multiAgent.directorPrompt } }
+      : {}),
+  }));
+
+  const mediaIndex = {};
+  for (const r of audioRecords) mediaIndex[audioIdToPath.get(r.id)] = { type: 'audio', format: r.format, duration: r.duration, voice: r.voice };
+  for (const m of mediaFiles) {
+    const elementId = m.id.includes(':') ? m.id.split(':').slice(1).join(':') : m.id;
+    const ext = m.mimeType?.split('/')[1] || 'jpg';
+    mediaIndex[`media/${elementId}.${ext}`] = { type: 'generated', mimeType: m.mimeType, size: m.size, prompt: m.prompt };
+  }
+
+  console.log(`Encoding ${audioRecords.length} audio + ${mediaFiles.length} media blobs as base64…`);
+  const _embeddedAudio = {};
+  for (const r of audioRecords) _embeddedAudio[audioIdToPath.get(r.id)] = await b64(r.blob);
+  const _embeddedMedia = {};
+  for (const m of mediaFiles) {
+    const elementId = m.id.includes(':') ? m.id.split(':').slice(1).join(':') : m.id;
+    const ext = m.mimeType?.split('/')[1] || 'jpg';
+    _embeddedMedia[`media/${elementId}.${ext}`] = await b64(m.blob);
+    if (m.poster) _embeddedMedia[`media/${elementId}.poster.jpg`] = await b64(m.poster);
+  }
+
+  const manifest = {
+    formatVersion: 1,
+    exportedAt: new Date().toISOString(),
+    appVersion: '0.1.1-console-snippet',
+    stage: { name: stage.name, description: stage.description, language: stage.languageDirective, style: stage.style, createdAt: stage.createdAt, updatedAt: stage.updatedAt },
+    agents, scenes: manifestScenes, mediaIndex,
+    _embeddedAudio, _embeddedMedia,
   };
+
+  const safeName = (stage.name || 'classroom').replace(/[\\/:*?"<>|]/g, '_') || 'classroom';
+  const blob = new Blob([JSON.stringify(manifest)], { type: 'application/json' });
   const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([JSON.stringify(classroom, null, 2)], { type: 'application/json' }));
-  a.download = `${classroom.id}.json`;
+  a.href = URL.createObjectURL(blob);
+  a.download = `${safeName}.classroom.json`;
   a.click();
-  console.log(`Exported "${classroom.stage.name}" — ${classroom.scenes.length} scenes`);
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  console.log(`Exported "${stage.name}" — ${scenes.length} scenes, ${audioRecords.length} audio, ${mediaFiles.length} media → ${a.download} (${(blob.size / 1024 / 1024).toFixed(1)} MB)`);
 })();
 ```
 
-Note: this snippet does NOT extract TTS audio blobs from the `audioFiles` table — v1 exporter is slides-only (no audio in the ZIP).
+The snippet runs entirely read-only against OpenMAIC's IndexedDB and touches zero OpenMAIC code. The output filename ends in `.classroom.json`. Upload it to this UI — same Local Export panel, the file-picker accepts both `.maic.zip` and `.classroom.json`.
 
 ### Automation mode (secondary, backend-driven)
 

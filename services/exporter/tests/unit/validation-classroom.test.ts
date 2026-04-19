@@ -54,15 +54,43 @@ describe('ClassroomSchema', () => {
     expect(result.error.issues.some((i) => i.path.join('.') === 'scenes')).toBe(true);
   });
 
-  it('rejects scene with missing id', () => {
-    const bad = {
+  it('accepts scene without id (manifest-shape tolerance)', () => {
+    // α.1 relaxed the schema to accept OpenMAIC's .maic.zip manifest, which
+    // strips id fields. Callers (the manifest adapter) synthesize ids at
+    // conversion time. A scene with just {order, actions} should now pass.
+    const valid = {
       ...MINIMAL_VALID,
       scenes: [{ order: 0, actions: [] }],
+    };
+    const result = ClassroomSchema.safeParse(valid);
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects scene with missing order (still required)', () => {
+    const bad = {
+      ...MINIMAL_VALID,
+      scenes: [{ id: 'sc1', actions: [] }],
     };
     const result = ClassroomSchema.safeParse(bad);
     expect(result.success).toBe(false);
     if (result.success) return;
-    expect(result.error.issues.some((i) => i.path.join('.').startsWith('scenes.0.id'))).toBe(true);
+    expect(result.error.issues.some((i) => i.path.join('.').startsWith('scenes.0.order'))).toBe(true);
+  });
+
+  it('accepts .maic.zip manifest-shape extras (agents, mediaIndex, formatVersion)', () => {
+    const manifestish = {
+      stage: { name: 'Intro to X' },   // no id — manifest shape
+      scenes: [
+        { order: 0, title: 'Hello', actions: [], type: 'slide', content: { type: 'slide', canvas: {} } },
+      ],
+      agents: [{ name: 'Teacher', role: 'teacher' }],
+      mediaIndex: { 'audio/sp1.mp3': { type: 'audio', format: 'mp3' } },
+      formatVersion: 1,
+      exportedAt: '2026-04-19T00:00:00Z',
+      appVersion: '0.1.1',
+    };
+    const result = ClassroomSchema.safeParse(manifestish);
+    expect(result.success).toBe(true);
   });
 
   it('defaults scenes[].actions to [] when omitted', () => {
