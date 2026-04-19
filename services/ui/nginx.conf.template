@@ -1,0 +1,60 @@
+# OpenMAIC Exporter UI — nginx server block (template).
+#
+# nginx:alpine's entrypoint runs envsubst over this file at container start,
+# producing /etc/nginx/conf.d/default.conf. NGINX_ENVSUBST_FILTER is set to
+# "^EXPORTER_" so only our own env vars are substituted; nginx runtime
+# variables ($http_host, $uri, $host) are preserved as-is.
+
+server {
+    listen 80 default_server;
+    server_name _;
+
+    # ========================================================================
+    # Streaming download regex block.
+    #
+    # Matches ONLY the /api/export/jobs/<uuid>/download endpoint and streams
+    # unbuffered so large ZIPs don't get fully buffered in nginx. Browser-local
+    # exports bypass nginx entirely; this path exists for the Automation panel
+    # which uses the backend pull-mode flow.
+    #
+    # IMPORTANT: Inside `location ~`, a bare `proxy_pass <host>;` forwards the
+    # ORIGINAL request URI to the upstream — it ignores internal `rewrite`s.
+    # Passing `${EXPORTER_BASE_URL}$uri;` uses the post-rewrite $uri (which
+    # equals /export/jobs/<id>/download after the rewrite strips /api/), so
+    # Fastify receives the path it expects.
+    # ========================================================================
+    location ~ ^/api/export/jobs/[^/]+/download$ {
+        rewrite ^/api/(.*)$ /$1 break;
+        proxy_pass ${EXPORTER_BASE_URL}$uri;
+        proxy_set_header Host $http_host;
+        proxy_set_header Authorization "Bearer ${EXPORTER_AUTH_TOKEN}";
+        proxy_buffering off;
+        proxy_read_timeout 300s;
+    }
+
+    # ========================================================================
+    # Everything else under /api/ — buffered JSON APIs.
+    #
+    # Trailing slash on proxy_pass strips the /api/ prefix, so
+    # GET /api/formats → GET http://exporter:4000/formats on the backend.
+    # No client_max_body_size here: pull-mode request bodies are ~100 bytes
+    # (just {classroomId}); nginx default (1 MB) is plenty.
+    # ========================================================================
+    location /api/ {
+        proxy_pass ${EXPORTER_BASE_URL}/;
+        proxy_set_header Host $http_host;
+        proxy_set_header Authorization "Bearer ${EXPORTER_AUTH_TOKEN}";
+        proxy_buffering on;
+        proxy_read_timeout 60s;
+    }
+
+    # ========================================================================
+    # Static UI. No build step → no hashed filenames → browsers must revalidate
+    # on every request so UI updates actually reach users.
+    # ========================================================================
+    location / {
+        root /usr/share/nginx/html;
+        try_files $uri $uri/ /index.html;
+        add_header Cache-Control "no-cache";
+    }
+}

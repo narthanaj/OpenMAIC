@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OpenMAIC Exporter</title>
+  <link rel="stylesheet" href="styles.css" />
+  <!-- JSZip is vendored locally for offline + pinned-version reliability. -->
+  <script src="vendor/jszip.min.js"></script>
+</head>
+<body>
+  <header>
+    <h1>OpenMAIC Exporter</h1>
+    <p class="subtitle">
+      Package classrooms as SCORM 1.2 or static HTML.
+      <a href="#automation" class="subtle-link">Also: Automation mode &darr;</a>
+    </p>
+  </header>
+
+  <main>
+    <!-- ==================================================================== -->
+    <!-- LOCAL EXPORT PANEL — browser-side, no network traffic.                -->
+    <!-- ==================================================================== -->
+    <section class="panel" id="local-panel" aria-labelledby="local-heading">
+      <h2 id="local-heading">Local export</h2>
+      <p class="panel-desc">
+        Upload or paste your classroom JSON. The export happens entirely in your browser — no data
+        leaves this tab.
+      </p>
+
+      <div class="field">
+        <label for="local-format">Format</label>
+        <select id="local-format">
+          <!-- populated by app.js from GET /api/formats -->
+          <option value="">Loading…</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label for="local-file">Upload classroom.json</label>
+        <input type="file" id="local-file" accept="application/json,.json" />
+        <p class="file-status" id="local-file-status" aria-live="polite"></p>
+      </div>
+
+      <details class="textarea-fallback">
+        <summary>…or paste JSON instead (small classrooms only)</summary>
+        <textarea id="local-paste" rows="10" placeholder='{"id":"...","stage":{...},"scenes":[...]}'></textarea>
+        <p class="muted">
+          For anything over a few MB, use the file picker above — pasting into a textarea freezes the
+          browser.
+        </p>
+      </details>
+
+      <div class="actions">
+        <button id="local-export-btn" type="button" disabled>Export locally</button>
+        <span class="status" id="local-status" aria-live="polite"></span>
+      </div>
+
+      <div class="banner banner-error hidden" id="local-error" role="alert"></div>
+    </section>
+
+    <!-- ==================================================================== -->
+    <!-- AUTOMATION PANEL — backend-driven pull-mode flow for webhooks/cron.   -->
+    <!-- ==================================================================== -->
+    <section class="panel" id="automation" aria-labelledby="automation-heading">
+      <h2 id="automation-heading">Automation mode</h2>
+      <p class="panel-desc">
+        For webhooks, cron jobs, or any programmatic caller. The exporter pulls the classroom from
+        OpenMAIC over the internal Docker network and produces the ZIP server-side. Heavy data never
+        leaves the server rack.
+      </p>
+
+      <div class="field-row">
+        <div class="field">
+          <label for="auto-format">Format</label>
+          <select id="auto-format">
+            <option value="">Loading…</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="auto-classroom-id">Classroom ID</label>
+          <input type="text" id="auto-classroom-id" placeholder="FYZ7yiAFyy" />
+        </div>
+        <div class="field">
+          <label for="auto-webhook">Webhook URL (optional)</label>
+          <input type="url" id="auto-webhook" placeholder="https://your.server/hook" />
+        </div>
+      </div>
+
+      <div class="actions">
+        <button id="auto-submit-btn" type="button">Submit export job</button>
+        <span class="status" id="auto-status" aria-live="polite"></span>
+      </div>
+
+      <div class="banner banner-error hidden" id="auto-error" role="alert"></div>
+
+      <h3 class="jobs-heading">Recent jobs</h3>
+      <table class="jobs-table" id="jobs-table">
+        <thead>
+          <tr>
+            <th>Format</th>
+            <th>Status</th>
+            <th>Submitted</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody id="jobs-tbody">
+          <tr class="empty-row"><td colspan="4">Loading…</td></tr>
+        </tbody>
+      </table>
+
+      <details class="curl-hint">
+        <summary>curl equivalent</summary>
+        <pre><code>curl -X POST http://127.0.0.1:5000/api/export/scorm1.2 \
+  -H "Content-Type: application/json" \
+  -d '{"classroomId":"FYZ7yiAFyy","webhookUrl":"https://your.server/hook"}'</code></pre>
+      </details>
+    </section>
+  </main>
+
+  <footer>
+    <p class="muted">
+      UI is localhost-only by default. To expose remotely, see <code>services/ui/README.md</code> for
+      the override + auth_basic recipe.
+    </p>
+  </footer>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

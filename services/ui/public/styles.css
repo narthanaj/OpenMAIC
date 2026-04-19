@@ -1,0 +1,188 @@
+/* Minimal, clean, system-font UI. Light theme only for v1. */
+
+:root {
+  --bg: #fafafa;
+  --fg: #1a1a1a;
+  --muted: #6a6a6a;
+  --border: #e0e0e0;
+  --panel: #ffffff;
+  --accent: #1a1a1a;
+  --accent-hover: #333;
+  --success: #2f7a3f;
+  --warning: #a66a00;
+  --error: #b23a2f;
+  --code-bg: #f3f3f3;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--fg);
+  line-height: 1.5;
+}
+
+header {
+  max-width: 960px;
+  margin: 2.5rem auto 1rem;
+  padding: 0 2rem;
+}
+
+header h1 { margin: 0 0 0.25rem; font-size: 1.75rem; }
+header .subtitle { margin: 0; color: var(--muted); font-size: 0.95rem; }
+header .subtle-link { color: var(--muted); text-decoration: underline; margin-left: 0.5rem; }
+
+main {
+  max-width: 960px;
+  margin: 0 auto 3rem;
+  padding: 0 2rem;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1.5rem 1.75rem;
+  margin-bottom: 1.5rem;
+}
+
+.panel h2 { margin: 0 0 0.25rem; font-size: 1.25rem; }
+.panel .panel-desc { margin: 0 0 1.5rem; color: var(--muted); font-size: 0.95rem; }
+
+.field { margin-bottom: 1rem; }
+.field-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1rem; margin-bottom: 1rem; }
+@media (max-width: 700px) { .field-row { grid-template-columns: 1fr; } }
+
+.field label {
+  display: block;
+  font-size: 0.875rem;
+  font-weight: 500;
+  margin-bottom: 0.35rem;
+  color: var(--fg);
+}
+
+.field input,
+.field select,
+textarea {
+  width: 100%;
+  padding: 0.5rem 0.65rem;
+  font: inherit;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--fg);
+}
+
+.field input[type="file"] { padding: 0.35rem; background: #fcfcfc; }
+
+textarea {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  resize: vertical;
+  min-height: 6rem;
+}
+
+.file-status { margin: 0.5rem 0 0; font-size: 0.8125rem; color: var(--muted); }
+.file-status.ok { color: var(--success); }
+.file-status.warn { color: var(--warning); }
+.file-status.err { color: var(--error); }
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+button {
+  padding: 0.55rem 1.25rem;
+  font: inherit;
+  font-weight: 500;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.1s ease;
+}
+
+button:hover:not(:disabled) { background: var(--accent-hover); }
+button:disabled { opacity: 0.55; cursor: not-allowed; }
+
+.status { font-size: 0.875rem; color: var(--muted); }
+
+.banner {
+  padding: 0.75rem 1rem;
+  border-radius: 6px;
+  margin-top: 1rem;
+  font-size: 0.875rem;
+}
+.banner-error { background: #fdecea; color: var(--error); border: 1px solid #f5c6c0; }
+.banner.hidden { display: none; }
+
+.textarea-fallback {
+  margin-bottom: 1rem;
+  padding: 0.75rem 1rem;
+  background: #fcfcfc;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.textarea-fallback summary { cursor: pointer; color: var(--muted); font-size: 0.875rem; }
+.textarea-fallback textarea { margin-top: 0.5rem; }
+.muted { color: var(--muted); font-size: 0.8125rem; margin: 0.5rem 0 0; }
+
+.jobs-heading { margin: 2rem 0 0.75rem; font-size: 1rem; }
+.jobs-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+.jobs-table th,
+.jobs-table td {
+  text-align: left;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+.jobs-table th { background: #fcfcfc; color: var(--muted); font-weight: 500; }
+.jobs-table tbody tr:hover { background: #fcfcfc; cursor: pointer; }
+.jobs-table .empty-row td { color: var(--muted); text-align: center; padding: 1.5rem; }
+
+.badge {
+  display: inline-block;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+.badge.pending,
+.badge.running { background: #e8e8e8; color: var(--fg); }
+.badge.done { background: #e0efe4; color: var(--success); }
+.badge.failed { background: #fdecea; color: var(--error); }
+.badge.timeout { background: #fff4de; color: var(--warning); }
+
+.curl-hint {
+  margin-top: 1.5rem;
+  padding: 0.75rem 1rem;
+  background: var(--code-bg);
+  border-radius: 6px;
+}
+.curl-hint summary { cursor: pointer; color: var(--muted); font-size: 0.875rem; }
+.curl-hint pre {
+  margin: 0.75rem 0 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8125rem;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+footer {
+  max-width: 960px;
+  margin: 0 auto 2rem;
+  padding: 0 2rem;
+  font-size: 0.8125rem;
+  color: var(--muted);
+}
+footer code { background: var(--code-bg); padding: 0.1rem 0.3rem; border-radius: 3px; }
