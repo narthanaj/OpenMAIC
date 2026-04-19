@@ -75,3 +75,10 @@ tests/generation/*.eval.result.md
 
 # Eval results
 eval/whiteboard-layout/results/
+
+# Exporter sidecar — local dev
+docker-compose.override.yml
+services/exporter/node_modules/
+services/exporter/dist/
+services/exporter/coverage/
+services/exporter/*.tsbuildinfo

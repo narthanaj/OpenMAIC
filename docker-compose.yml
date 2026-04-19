@@ -17,6 +17,14 @@ services:
       # section for details.
       - ./data:/app/data
     restart: unless-stopped
+    # Real app-readiness probe so dependents (e.g. the exporter sidecar) can wait on
+    # `condition: service_healthy` instead of racing a still-booting Next.js process.
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 30s       # Next.js first boot needs breathing room
 
   # Optional distributed-tracing backend for OpenMAIC's OpenTelemetry spans.
   # Activate with:   docker compose --profile tempo up -d
@@ -34,5 +42,74 @@ services:
       - tempo-data:/var/tempo
     restart: unless-stopped
 
+  # Content export sidecar. Packages OpenMAIC classrooms into LMS-ready formats
+  # (SCORM 1.2 in v1; SCORM 2004 / xAPI / cmi5 / H5P planned). Runs on the internal
+  # compose network by default — to reach it from the host, add a ports: mapping in
+  # a gitignored docker-compose.override.yml. Zero changes to OpenMAIC's native code;
+  # pulls classroom JSON over HTTP via OPENMAIC_BASE_URL.
+  exporter:
+    build: ./services/exporter
+    # Parameterized image tag so CI can stamp a commit SHA or semver on every build
+    # (`IMAGE_TAG=abc123 docker compose build`). Local dev defaults to :latest.
+    # Rollback = `IMAGE_TAG=<old-sha> docker compose up -d exporter`.
+    image: openmaic-exporter:${IMAGE_TAG:-latest}
+    expose: ["4000"]
+    # Use env_file to match the openmaic service's pattern — compose reads the whole
+    # file into the container's environment at runtime. EXPORTER_AUTH_TOKEN lives in
+    # .env.local alongside the OpenMAIC keys. The app's own config.ts enforces
+    # fail-closed validation (refuse to start if the token is missing or too short).
+    env_file:
+      - .env.local
+    environment:
+      OPENMAIC_BASE_URL: http://openmaic:3000
+      JOB_TTL_HOURS: "24"
+      JOB_STORE_DRIVER: sqlite
+      EXPORT_STORAGE_DRIVER: local
+      WORKER_CONCURRENCY: "2"
+      DATA_DIR: /data
+      SHUTDOWN_GRACE_MS: "30000"
+    volumes:
+      - exporter-data:/data
+    depends_on:
+      openmaic:
+        condition: service_healthy
+    # Must exceed SHUTDOWN_GRACE_MS so Docker's SIGKILL doesn't race the app's
+    # in-process graceful drain.
+    stop_grace_period: 35s
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:4000/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
+  # Static web UI for the exporter. nginx:alpine + static HTML/CSS/JS. Acts as an
+  # auth-injecting reverse proxy for /api/* → exporter. Browser never sees the
+  # bearer token (stamped by nginx server-side). Local-only binding by default —
+  # exposing remotely requires docker-compose.override.yml + auth_basic (see the
+  # UI's README for the recipe).
+  ui:
+    build: ./services/ui
+    image: openmaic-exporter-ui:${IMAGE_TAG:-latest}
+    ports:
+      - "127.0.0.1:5000:80"       # localhost-only; auth-injecting proxy = keep off LAN by default
+    env_file:
+      - .env.local                 # picks up EXPORTER_AUTH_TOKEN from the shared file
+    environment:
+      EXPORTER_BASE_URL: http://exporter:4000
+      # Restrict envsubst to our own prefix so nginx runtime vars like $http_host
+      # and $uri in the template stay intact.
+      NGINX_ENVSUBST_FILTER: "^EXPORTER_"
+    depends_on:
+      exporter:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
 volumes:
   tempo-data:
+  exporter-data:
